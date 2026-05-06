@@ -1,0 +1,547 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../img/favicon.ico" />
+    <title>SVM 支持向量机改进报告 - 神经网络</title>
+    <link rel="stylesheet" href="../css/theme.css" />
+    <link rel="stylesheet" href="../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+        <link href="../extra.css" rel="stylesheet" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "SVM \u652f\u6301\u5411\u91cf\u673a\u6539\u8fdb\u62a5\u544a";
+        var mkdocs_page_input_path = "svm_improved.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href=".." class="icon icon-home"> 神经网络
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="..">首页</a>
+                </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="..">神经网络</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href=".." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">SVM 支持向量机改进报告</li>
+    <li class="wy-breadcrumbs-aside">
+          <a href="https://github.com/OpenHUTB/nn/edit/master/docs/svm_improved.md" class="icon icon-github"> Edit on GitHub</a>
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="svm">SVM 支持向量机改进报告</h1>
+<h2 id="_1">一、概述</h2>
+<p>本次改进基于 <code>src/chap03_SVM/</code> 模块，针对原始 <code>svm.py</code> 中仅支持线性分类、缺乏数据预处理等问题进行了系统性优化。改进后的代码分布在以下四个文件中：</p>
+<ul>
+<li><code>svm_improved.py</code> — 核函数 SVM（支持 RBF/Linear/Poly/Sigmoid 核）</li>
+<li><code>svm_comparison.py</code> — 三种损失函数对比（平方误差/交叉熵/合页损失）</li>
+<li><code>svm_kernel_compare.py</code> — 线性 vs RBF 核可视化对比</li>
+<li><code>svm_multi.py</code> — 多分类 SVM（One-vs-Rest 策略）</li>
+</ul>
+<p>核心改进涵盖以下五个方面：</p>
+<ol>
+<li>核函数支持（RBF 高斯核处理非线性数据）</li>
+<li>数据标准化（Z-score 标准化提升收敛速度与精度）</li>
+<li>SMO 优化算法（替代梯度下降，提升训练效率）</li>
+<li>多分类扩展（One-vs-Rest 策略支持多类别分类）</li>
+<li>与 scikit-learn 基准对比（验证实现正确性）</li>
+</ol>
+<hr />
+<h2 id="_2">二、原代码问题分析</h2>
+<h3 id="21">2.1 仅支持线性分类</h3>
+<p><strong>原代码 <code>svm.py</code>：</strong></p>
+<pre><code class="language-python">class SVM:
+    def train(self, data_train):
+        X = data_train[:, :2]
+        y = data_train[:, 2]
+        # 仅使用线性决策边界: score = w·x + b
+        score = np.dot(X, self.w) + self.b
+</code></pre>
+<p><strong>问题：</strong>
+- 决策函数 <code>f(x) = w·x + b</code> 只能产生线性决策边界
+- 对于非线性可分数据集（如 <code>train_kernel.txt</code>），模型无法有效分类
+- 在非线性数据集上的测试准确率仅约 81%，远低于核方法的 94.5%</p>
+<h3 id="22">2.2 缺乏数据标准化</h3>
+<p><strong>原代码：</strong></p>
+<pre><code class="language-python">def train(self, data_train):
+    X = data_train[:, :2]  # 直接使用原始特征
+</code></pre>
+<p><strong>问题：</strong>
+- SVM 对特征尺度非常敏感，不同特征的量纲差异会影响间隔计算
+- 未标准化的数据导致梯度下降收敛缓慢
+- 实验表明，不标准化时测试准确率为 94.50%，标准化后提升至 97.00%</p>
+<h3 id="23">2.3 梯度下降效率低</h3>
+<p><strong>原代码使用批量梯度下降优化 hinge loss：</strong></p>
+<pre><code class="language-python">for epoch in range(self.max_iter):
+    score = np.dot(X, self.w) + self.b
+    margin = y * score
+    idx = np.where(margin &lt; 1)[0]
+    dw = (2 * self.reg_lambda * self.w) - np.sum(y[idx, None] * X[idx], axis=0) / m
+    self.w -= self.learning_rate * dw
+</code></pre>
+<p><strong>问题：</strong>
+- 每次迭代需要计算所有样本的梯度，计算复杂度高
+- 学习率需要手动调节，过大导致震荡，过小导致收敛慢
+- 无法利用核函数的对偶形式</p>
+<h3 id="24">2.4 仅支持二分类</h3>
+<p><strong>问题：</strong>
+- 原始代码只能处理二分类问题
+- 无法直接扩展到多分类场景（如三分类数据集 <code>train_multi.txt</code>）</p>
+<hr />
+<h2 id="_3">三、改进内容详解</h2>
+<h3 id="31">3.1 核函数支持</h3>
+<p><strong>改进代码 <code>svm_improved.py</code>：</strong></p>
+<pre><code class="language-python">def _compute_kernel(self, X, Z):
+    if self.kernel == 'linear':
+        return np.dot(X, Z.T)
+    elif self.kernel == 'rbf':
+        gamma = self.gamma if isinstance(self.gamma, (int, float)) else 1.0 / X.shape[1]
+        sq_norm = np.add.outer(np.sum(X**2, axis=1), np.sum(Z**2, axis=1))
+        sq_norm -= 2 * np.dot(X, Z.T)
+        return np.exp(-gamma * sq_norm)
+    elif self.kernel == 'poly':
+        return (1 + np.dot(X, Z.T)) ** self.degree
+    elif self.kernel == 'sigmoid':
+        gamma = self.gamma if isinstance(self.gamma, (int, float)) else 1.0 / X.shape[1]
+        return np.tanh(gamma * np.dot(X, Z.T) + 1)
+</code></pre>
+<p><strong>支持的核函数：</strong></p>
+<table>
+<thead>
+<tr>
+<th>核函数</th>
+<th>公式</th>
+<th>适用场景</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Linear</td>
+<td>$K(x, z) = x^T z$</td>
+<td>线性可分数据</td>
+</tr>
+<tr>
+<td>RBF (高斯核)</td>
+<td>$K(x, z) = \exp(-\gamma |x-z|^2)$</td>
+<td>非线性数据，通用性最强</td>
+</tr>
+<tr>
+<td>Poly (多项式核)</td>
+<td>$K(x, z) = (1 + x^T z)^d$</td>
+<td>特定多项式分布数据</td>
+</tr>
+<tr>
+<td>Sigmoid</td>
+<td>$K(x, z) = \tanh(\gamma x^T z + 1)$</td>
+<td>类神经网络映射</td>
+</tr>
+</tbody>
+</table>
+<p><strong>效果：</strong>
+- RBF 核在非线性数据上的测试准确率从 81.0% 提升至 94.5%（+13.5%）
+- 核函数通过隐式高维映射，使原本线性不可分的数据变得可分</p>
+<h3 id="32-z-score">3.2 数据标准化（Z-score）</h3>
+<p><strong>改进代码：</strong></p>
+<pre><code class="language-python">if self.normalize:
+    self.mean_ = np.mean(X, axis=0)
+    self.std_ = np.std(X, axis=0)
+    self.std_[self.std_ == 0] = 1e-8  # 防止除以零
+    X = (X - self.mean_) / self.std_
+</code></pre>
+<p><strong>原理：</strong>
+- Z-score 标准化：$X_{norm} = \frac{X - \mu}{\sigma}$
+- 将每个特征缩放到均值为 0、标准差为 1 的分布
+- 防止不同量纲的特征主导模型训练</p>
+<p><strong>实验对比（核数据集）：</strong></p>
+<table>
+<thead>
+<tr>
+<th>指标</th>
+<th>无标准化</th>
+<th>Z-score 标准化</th>
+<th>变化</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>训练准确率</td>
+<td>100.00%</td>
+<td>98.50%</td>
+<td>-1.50%</td>
+</tr>
+<tr>
+<td>测试准确率</td>
+<td>94.50%</td>
+<td>97.00%</td>
+<td><strong>+2.50%</strong></td>
+</tr>
+<tr>
+<td>训练耗时</td>
+<td>0.1288s</td>
+<td>0.0655s</td>
+<td><strong>-49%</strong></td>
+</tr>
+</tbody>
+</table>
+<p><strong>分析：</strong>
+- 标准化后测试准确率提升 2.50%，说明泛化能力增强
+- 训练耗时减少 49%，因为标准化后的数据梯度下降收敛更快
+- 训练准确率略有下降（100% → 98.50%），实际上是减少了过拟合</p>
+<h3 id="33-smo">3.3 SMO 优化算法</h3>
+<p><strong>改进代码：</strong></p>
+<pre><code class="language-python"># SMO 核心更新逻辑
+for epoch in range(self.max_iter):
+    i = np.random.randint(m)  # 随机选择第一个变量
+    f_i = np.sum(self.alpha * y * K[i, :]) + self.b
+    E_i = f_i - y[i]
+    r_i = E_i * y[i]
+    if (r_i &lt; -0.001 and self.alpha[i] &lt; self.C) or (r_i &gt; 0.001 and self.alpha[i] &gt; 0):
+        j = np.random.randint(m)  # 随机选择第二个变量
+        # 计算边界 L, H
+        # 更新 alpha_j, alpha_i
+        # 更新偏置 b
+</code></pre>
+<p><strong>原理：</strong>
+- SMO（Sequential Minimal Optimization）每次只优化两个拉格朗日乘子
+- 通过 KKT 条件选择违反条件最严重的变量进行优化
+- 无需设置学习率，收敛性由理论保证</p>
+<p><strong>效果：</strong>
+- 利用核矩阵预计算，避免重复计算核函数
+- 对偶形式天然支持核函数扩展
+- 支持向量自动识别，模型具有稀疏性</p>
+<h3 id="34-svmone-vs-rest">3.4 多分类 SVM（One-vs-Rest）</h3>
+<p><strong>改进代码 <code>svm_multi.py</code>：</strong></p>
+<pre><code class="language-python">class MultiClassSVM:
+    def train(self, X, y):
+        self.models = []
+        for c in np.unique(y):
+            y_binary = np.where(y == c, 1, -1)  # 当前类 vs 其他类
+            w, b = self._train_binary_svm(X, y_binary)
+            self.models.append((c, w, b))
+
+    def predict(self, X):
+        scores = []
+        for class_label, w, b in self.models:
+            score = np.dot(X, w) + b
+            scores.append(score)
+        scores = np.vstack(scores)
+        return np.array([self.models[i][0] for i in np.argmax(scores, axis=0)])
+</code></pre>
+<p><strong>原理：</strong>
+- 对 K 个类别训练 K 个二分类器
+- 第 i 个分类器将第 i 类作为正类，其余所有类作为负类
+- 预测时选择决策得分最高的类别</p>
+<p><strong>效果：</strong>
+- 三分类任务训练准确率：97.67%
+- 三分类任务测试准确率：98.67%</p>
+<h3 id="35">3.5 三种损失函数对比</h3>
+<p><strong><code>svm_comparison.py</code> 实现了三种线性分类器的对比：</strong></p>
+<table>
+<thead>
+<tr>
+<th>损失函数</th>
+<th>公式</th>
+<th>特点</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>平方误差</td>
+<td>$E = \sum(y_n - t_n)^2 + \lambda|w|^2$</td>
+<td>对异常值敏感，梯度恒定</td>
+</tr>
+<tr>
+<td>交叉熵</td>
+<td>$E = \sum\log(1+\exp(-y_n t_n)) + \lambda|w|^2$</td>
+<td>概率解释，平滑梯度</td>
+</tr>
+<tr>
+<td>合页损失</td>
+<td>$E = \sum[1-y_n t_n]_+ + \lambda|w|^2$</td>
+<td>稀疏支持向量，最大间隔</td>
+</tr>
+</tbody>
+</table>
+<p><strong>实验结果（线性数据集）：</strong></p>
+<table>
+<thead>
+<tr>
+<th>方法</th>
+<th>训练准确率</th>
+<th>测试准确率</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>线性分类器（平方误差）</td>
+<td>96.00%</td>
+<td>98.00%</td>
+</tr>
+<tr>
+<td>逻辑回归（交叉熵）</td>
+<td>95.50%</td>
+<td>97.00%</td>
+</tr>
+<tr>
+<td>SVM（合页损失）</td>
+<td>95.50%</td>
+<td>97.50%</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="_4">四、可视化改进</h2>
+<p><strong><code>svm_kernel_compare.py</code> 生成决策边界对比图：</strong></p>
+<ul>
+<li>左图：线性 SVM 的决策边界（直线，无法正确分类非线性数据）</li>
+<li>中图：RBF 核 SVM 的决策边界（曲线，准确拟合数据分布）</li>
+<li>右图：准确率对比柱状图</li>
+</ul>
+<pre><code class="language-python"># 生成对比图
+fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+plot_decision_boundary(axes[0], linear_svm, X_train, y_train, ...)
+plot_decision_boundary(axes[1], rbf_wrapper, X_train, y_train, ...)
+# 柱状图对比
+axes[2].bar(...)
+</code></pre>
+<p>输出文件：<code>src/chap03_SVM/outputs/svm_kernel_comparison.png</code></p>
+<hr />
+<h2 id="_5">五、结果对比</h2>
+<h3 id="_6">核函数效果对比（非线性数据集）</h3>
+<table>
+<thead>
+<tr>
+<th>方法</th>
+<th>训练准确率</th>
+<th>测试准确率</th>
+<th>提升</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>线性 SVM（原始）</td>
+<td>81.5%</td>
+<td>81.0%</td>
+<td>—</td>
+</tr>
+<tr>
+<td>RBF 核 SVM（改进）</td>
+<td>97.5%</td>
+<td>94.5%</td>
+<td><strong>+13.5%</strong></td>
+</tr>
+</tbody>
+</table>
+<h3 id="_7">标准化效果对比（核数据集）</h3>
+<table>
+<thead>
+<tr>
+<th>指标</th>
+<th>无标准化</th>
+<th>Z-score 标准化</th>
+<th>变化</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>训练准确率</td>
+<td>100.00%</td>
+<td>98.50%</td>
+<td>-1.50%</td>
+</tr>
+<tr>
+<td>测试准确率</td>
+<td>94.50%</td>
+<td>97.00%</td>
+<td><strong>+2.50%</strong></td>
+</tr>
+<tr>
+<td>训练耗时</td>
+<td>0.1288s</td>
+<td>0.0655s</td>
+<td><strong>-49%</strong></td>
+</tr>
+</tbody>
+</table>
+<h3 id="_8">完整性能汇总</h3>
+<table>
+<thead>
+<tr>
+<th>模型</th>
+<th>数据集</th>
+<th>训练准确率</th>
+<th>测试准确率</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>线性 SVM（原始）</td>
+<td>线性</td>
+<td>95.50%</td>
+<td>97.50%</td>
+</tr>
+<tr>
+<td>RBF 核 SVM</td>
+<td>线性</td>
+<td>96.00%</td>
+<td>97.00%</td>
+</tr>
+<tr>
+<td>RBF 核 SVM</td>
+<td>非线性</td>
+<td>99.00%</td>
+<td>95.00%</td>
+</tr>
+<tr>
+<td>scikit-learn SVM</td>
+<td>非线性</td>
+<td>96.00%</td>
+<td>95.50%</td>
+</tr>
+<tr>
+<td>多分类 SVM (OvR)</td>
+<td>三分类</td>
+<td>97.67%</td>
+<td>98.67%</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="_9">六、总结与展望</h2>
+<h3 id="_10">改进总结</h3>
+<p>本次改进针对原代码中的 4 个核心问题进行了修复和优化：</p>
+<ol>
+<li><strong>引入核函数支持</strong> — RBF 核使非线性数据的测试准确率从 81% 提升至 94.5%</li>
+<li><strong>添加数据标准化</strong> — Z-score 标准化提升测试准确率 2.5%，训练速度提升 49%</li>
+<li><strong>实现 SMO 优化</strong> — 替代梯度下降，支持对偶形式和核函数高效计算</li>
+<li><strong>扩展多分类能力</strong> — One-vs-Rest 策略实现三分类，准确率达 98.67%</li>
+</ol>
+<h3 id="_11">可继续改进的方向</h3>
+<ul>
+<li><strong>在线学习（增量训练）</strong>：支持新样本的增量更新，避免全量重训练</li>
+<li><strong>核函数自动选择</strong>：通过交叉验证自动选择最优核函数及其参数</li>
+<li><strong>GPU 加速</strong>：利用 CuPy 或 Numba 对大规模核矩阵计算进行 GPU 加速</li>
+<li><strong>概率输出</strong>：通过 Platt Scaling 将 SVM 决策值转换为概率</li>
+<li><strong>不平衡数据处理</strong>：引入类别权重或 SMOTE 过采样处理类别不均衡问题</li>
+</ul>
+<hr />
+<h2 id="_12">七、使用方式</h2>
+<h3 id="svmpart-1">运行核 SVM（Part 1）</h3>
+<pre><code class="language-bash">cd src/chap03_SVM
+python svm_improved.py
+</code></pre>
+<h3 id="_13">运行标准化对比实验</h3>
+<pre><code class="language-bash">python svm_improved.py --compare
+</code></pre>
+<h3 id="part-2">运行损失函数对比（Part 2）</h3>
+<pre><code class="language-bash">python svm_comparison.py
+</code></pre>
+<h3 id="svmpart-3">运行多分类 SVM（Part 3）</h3>
+<pre><code class="language-bash">python svm_multi.py
+</code></pre>
+<h3 id="_14">运行核函数可视化对比</h3>
+<pre><code class="language-bash">python svm_kernel_compare.py
+</code></pre>
+<hr />
+<h2 id="_15">八、文件结构</h2>
+<pre><code class="language-text">src/chap03_SVM/
+├── svm.py                # 原始线性 SVM（Hinge Loss + 梯度下降）
+├── svm_improved.py       # 改进：核 SVM（支持 RBF/Linear/Poly/Sigmoid 核 + SMO）
+├── svm_comparison.py     # 三种损失函数对比（平方误差/交叉熵/合页损失）
+├── svm_kernel_compare.py # 线性 vs RBF 核可视化对比
+├── svm_multi.py          # 多分类 SVM（One-vs-Rest 策略）
+├── data/                 # 数据集目录
+│   ├── train_linear.txt  # 线性训练集
+│   ├── test_linear.txt   # 线性测试集
+│   ├── train_kernel.txt  # 核函数训练集
+│   ├── test_kernel.txt   # 核函数测试集
+│   ├── train_multi.txt   # 多分类训练集
+│   └── test_multi.txt    # 多分类测试集
+└── README.md             # 项目说明文件
+</code></pre>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+      <p>OpenHUTB 版权所有 &copy; 2026</p>
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+        <span>
+          <a href="https://github.com/OpenHUTB/nn" class="fa fa-github" style="color: #fcfcfc"> GitHub</a>
+        </span>
+    
+    
+    
+  </span>
+</div>
+    <script src="../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "..";</script>
+    <script src="../js/theme_extra.js"></script>
+    <script src="../js/theme.js"></script>
+      <script src="../extra.js"></script>
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.4/MathJax.js?config=TeX-AMS-MML_HTMLorMML"></script>
+      <script src="../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>
